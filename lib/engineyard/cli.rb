@@ -52,18 +52,18 @@ module EY
     def deploy
       EY.ui.info "Loading application data from EY Cloud..."
 
-      app, environment = fetch_app_and_environment(options[:app], options[:environment], options[:account])
-      environment.ignore_bad_master = options[:ignore_bad_master]
+      app_env = fetch_app_environment(options[:app], options[:environment], options[:account])
+      app_env.environment.ignore_bad_master = options[:ignore_bad_master]
       deploy_ref  = if options[:app]
-                      environment.resolve_branch(options[:ref], options[:ignore_default_branch]) ||
+                      app_env.determine_branch(options[:ref], options[:ignore_default_branch]) ||
                         raise(EY::Error, "When specifying the application, you must also specify the ref to deploy\nUsage: ey deploy --app <app name> --ref <branch|tag|ref>")
                     else
-                      environment.resolve_branch(options[:ref], options[:ignore_default_branch]) ||
+                      app_env.determine_branch(options[:ref], options[:ignore_default_branch]) ||
                         repo.current_branch ||
                         raise(DeployArgumentError)
                     end
 
-      EY.ui.info "Beginning deploy of ref '#{deploy_ref}' for '#{app.name}' in '#{environment.name}' on server..."
+      EY.ui.info "Beginning deploy of ref '#{deploy_ref}' for '#{app_env.app.name}' in '#{app_env.environment.name}' on server..."
 
       deploy_options = {'extras' => options[:extra_deploy_hook_options]}
       if options.has_key?('migrate') # thor set migrate => nil when --no-migrate
@@ -72,7 +72,7 @@ module EY
       deploy_options['verbose'] = options['verbose'] if options.has_key?('verbose')
 
 
-      if environment.deploy(app, deploy_ref, deploy_options)
+      if app_env.deploy(deploy_ref, deploy_options)
         EY.ui.info "Deploy complete"
         EY.ui.info "Now you can run `ey launch' to open the application in a browser."
       else
@@ -97,12 +97,12 @@ module EY
     method_option :account, :type => :string, :aliases => %w(-c),
       :desc => "Name of the account in which the application can be found"
     def status
-      app, environment = fetch_app_and_environment(options[:app], options[:environment], options[:account])
-      deployment = app.last_deployment_on(environment)
+      app_env = fetch_app_environment(options[:app], options[:environment], options[:account])
+      deployment = app_env.last_deployment
       if deployment
         EY.ui.show_deployment(deployment)
       else
-        raise EY::Error, "Application #{app.name} hass not been deployed on #{environment.name}."
+        raise EY::Error, "Application #{app_env.app.name} has not been deployed on #{app_env.environment.name}."
       end
     end
 
@@ -121,7 +121,8 @@ module EY
       elsif options[:all]
         EY.ui.print_envs(api.apps, EY.config.default_environment, options[:simple])
       else
-        apps = api.apps_for_repo(repo)
+        repo.fail_on_no_remotes!
+        apps = api.apps.find_all {|a| repo.has_remote?(a.repository_uri) }
 
         if apps.size > 1
           message = "This git repo matches multiple Applications in AppCloud:\n"
@@ -176,10 +177,10 @@ module EY
     method_option :extra_deploy_hook_options, :type => :hash, :default => {},
       :desc => "Additional options to be made available in deploy hooks (in the 'config' hash)"
     def rollback
-      app, environment = fetch_app_and_environment(options[:app], options[:environment], options[:account])
+      app_env = fetch_app_environment(options[:app], options[:environment], options[:account])
 
-      EY.ui.info("Rolling back '#{app.name}' in '#{environment.name}'")
-      if environment.rollback(app, options[:extra_deploy_hook_options], options[:verbose])
+      EY.ui.info("Rolling back '#{app_env.app.name}' in '#{app_env.environment.name}'")
+      if app_env.rollback(options[:extra_deploy_hook_options], options[:verbose])
         EY.ui.info "Rollback complete"
       else
         raise EY::Error, "Rollback failed"
@@ -352,8 +353,8 @@ module EY
 
     desc "whoami", "Who am I logged in as?"
     def whoami
-      user = api.user
-      EY.ui.say "#{user.name} (#{user.email})"
+      current_user = api.current_user
+      EY.ui.say "#{current_user.name} (#{current_user.email})"
     end
 
   end # CLI
